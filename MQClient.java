@@ -8,9 +8,11 @@ import javax.jms.Queue;
 import javax.jms.TextMessage;
 import java.io.IOException;
 import java.net.MalformedURLException;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -23,22 +25,107 @@ public class MQMain {
     public static void main(String[] args) throws JMSException, IOException {
 //        uatPutMessageToTwoQueues();
 
-        String content = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
-                "<esb>\n" +
-                "    <Header>\n" +
-                "    </Header>\n" +
-                "    <Body>\n" +
-                "    </Body>\n" +
-                "</esb>";
+//        testAccountInquiry(MSG_ACCOUNT_INQUIRY);
 
-        testAccountInquiry(content);
+//        testAccountInquiryUATSG(MSG_ACCOUNT_INQUIRY);
+        uatPutMessageToTwoQueuesUATSG();
+        //uatPutMessageToTwoQueues();
+
+    }
+
+    private static void testAccountInquiryUATSG(String content) throws JMSException {
+
+        final String $HOST$ = "localhost";
+        final int PORT1 = 14141;
+        final int PORT2 = 14142;
+        final String QMGR1 = "*ESBQM1_SVR";
+        final String QMGR2 = "*ESBQM2_SVR";
+        final String CHANNEL1 = "USER.HSTSVR1.SVRCONN";
+        final String CHANNEL2 = "USER.HSTSVR2.SVRCONN";
+
+        final String SG_QUEUE_IN = "Q.AbC.SG.IN";
+        final String SG_QUEUE_OUT = "Q.AbC.SG.OUT";
+        MQQueueConnectionFactory factory;
+
+        System.out.println("\n==========Connection Test (UAT.SG 1) ==============\n");
+        factory = createMqQueueConnectionFactory($HOST$, PORT1, QMGR1, CHANNEL1);
+        testAccountInquiry(factory, SG_QUEUE_IN, SG_QUEUE_OUT, content);
+
+        System.out.println("\n==========Connection Test (UAT.SG 2) ==============\n");
+        factory = createMqQueueConnectionFactory($HOST$, PORT2, QMGR2, CHANNEL2);
+        testAccountInquiry(factory, SG_QUEUE_IN, SG_QUEUE_OUT, content);
+    }
+
+    private static void uatPutMessageToTwoQueuesUATSG() throws JMSException, MalformedURLException {
+        final String MQ_SERVER_QUEUE_MANAGER = "*ESBQM1_SVR,*ESBQM2_SVR";
+        final String MQ_SERVER_CHANNEL = "USER.HSTSVR1.SVRCONN";
+        final String MQ_SERVER_QUEUE_OUT = "Q.AbC.SERVER.SG.OUT";
+
+        System.out.println("(1) Initializing connection factory, session and queue...");
+        List<MQQueueConnectionFactory> mqQueueConnectionFactoryList = new ArrayList<>();
+        List<MQConnection> mqConnectionList = new ArrayList<>();
+        List<MQSession> mqSessionList = new ArrayList<>();
+        List<Queue> requestQueueList = new ArrayList<>();
+        List<MQMessageProducer> producerList = new ArrayList<>();
+
+        int i = 0;
+        for (String queueManager : MQ_SERVER_QUEUE_MANAGER.split(",")) {
+            MQQueueConnectionFactory factory = new MQQueueConnectionFactory();
+            try {
+                i++;
+                // factory.setCCDTURL(new URL(MQ_CCDT_URL));
+                factory.setQueueManager(queueManager);
+                factory.setHostName("localhost"); // local run with aid host port forwarded.
+                factory.setPort(14140 + i); //HK 14150, SG 14140
+                factory.setChannel(MQ_SERVER_CHANNEL.replace("1", String.valueOf(i)));
+                factory.setCCSID(1821);// ET
+                factory.setTransportType(1);// ET
+                mqQueueConnectionFactoryList.add(factory);
+
+                MQConnection connection = (MQConnection) factory.createConnection();
+                mqConnectionList.add(connection);
+                connection.start();
+
+                MQSession session = (MQSession) connection.createSession(false, AUTO_ACKNOWLEDGE);
+                mqSessionList.add(session);
+
+                Queue queue = session.createQueue(MQ_SERVER_QUEUE_OUT);
+                requestQueueList.add(queue);
+
+                MQMessageProducer producer = (MQMessageProducer) session.createProducer(queue);
+                producerList.add(producer);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            // System.err.printf("Queue Manage %s connection factory initialized.%s %n", queueManager, factory);
+        }
+
+        System.out.println("(2) Put message to queue evenly...");
+        int index = 0;
+        while (index++<2) {
+            MQSession session = mqSessionList.get(index % 2);
+            MQMessageProducer producer = producerList.get(index % 2);
+            try {
+                String msg94a = String.format("<esb>Chuck Norris!! to SERVER-%d. --%s</esb>", index, new Date());
+                TextMessage message = session.createTextMessage();
+                message.setText(msg94a);
+                producer.send(message);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        for (AutoCloseable resource : producerList) closing(resource);
+        for (AutoCloseable resource : mqSessionList) closing(resource);
+        for (AutoCloseable resource : mqConnectionList) closing(resource);
     }
 
     private static void uatPutMessageToTwoQueues() throws JMSException, MalformedURLException {
         final String MQ_SERVER_QUEUE_MANAGER = "*ESBQM1_SVR,*ESBQM2_SVR";
         final String MQ_SERVER_CHANNEL = "USER.HSTSVR.SVRCONN";
         final String MQ_SERVER_QUEUE_OUT = "Q.AbC.SERVER.OUT";
-        final String MQ_CCDT_URL = "file:/etc/CCDT_UAT_AbC.TAB";
+        final String MQ_CCDT_URL = "file:/D:/projects/AbC/AbC_git/src/main/misc/CCDT_UAT_AbC.TAB";
         final String MQ_SERVER_HOSTS = "10.30.201.101,10.30.201.102";
         final String MQ_SERVER_PORT = "1415";
         final String MQ_SERVER_QUEUE_IN = "Q.AbC.SERVER.IN";
@@ -84,7 +171,7 @@ public class MQMain {
             // System.err.printf("Queue Manage %s connection factory initialized.%s %n", queueManager, factory);
         }
 
-        System.out.println("(2) Put message to queue evenly...");
+        System.out.println("(2) Put message to queue evenly...");        if (1 > 0) return; // stop run this!!
         final AtomicInteger counter = new AtomicInteger();
         try {
             Files.newDirectoryStream(
@@ -148,7 +235,75 @@ public class MQMain {
         return mqQueueConnectionFactory;
     }
 
+    private static MQQueueConnectionFactory createMqQueueConnectionFactoryFromCCDT(String filePath) throws MalformedURLException {
+
+        MQQueueConnectionFactory mqQueueConnectionFactory = new MQQueueConnectionFactory();
+        mqQueueConnectionFactory.setCCDTURL(new URL(filePath));
+
+        return mqQueueConnectionFactory;
+    }
+
     private static void testAccountInquiry(String content) throws JMSException {
+
+        final String HOST = "localhost";
+        final int PORT = 1414;
+        final String CHANNEL = "USER.HOST.SVRCONN";
+        final String QMGR = "*ESBQM";
+        final String HK_QUEUE_IN = "Q.AbC.IN.SHFB";
+        final String HK_QUEUE_OUT = "Q.AbC.OUT.SHFB";
+        final String SG_QUEUE_IN = "Q.AbC.IN";
+        final String SG_QUEUE_OUT = "Q.AbC.OUT";
+        MQQueueConnectionFactory factory = createMqQueueConnectionFactory(HOST, PORT, QMGR, CHANNEL);
+        testAccountInquiry(factory, HK_QUEUE_IN, HK_QUEUE_OUT, content);
+    }
+
+    private static void testAccountInquiryUATHK(String content) throws JMSException {
+
+        final String HOST = "localhost";
+        final int PORT = 31415;
+        final String CHANNEL = "USER.HSTSVR1.SVRCONN";
+        final String QMGR = "*ESBQM1_SVR";
+        final String HK_QUEUE_IN = "Q.AbC.IN";
+        final String HK_QUEUE_OUT = "Q.AbC.OUT";
+        MQQueueConnectionFactory factory = createMqQueueConnectionFactory(HOST, PORT, QMGR, CHANNEL);
+        testAccountInquiry(factory, HK_QUEUE_IN, HK_QUEUE_OUT, content);
+    }
+
+    private static void testAccountInquiry(MQQueueConnectionFactory factory, String queueIn, String queueOut, String content) throws JMSException {
+
+        MQConnection mqConnection = (MQConnection) factory.createConnection();
+        mqConnection.start();
+        MQSession mqSession = (MQSession) mqConnection.createSession(false, AUTO_ACKNOWLEDGE);
+        Queue requestQueue = mqSession.createQueue(queueIn);
+        Queue replyQueue = mqSession.createQueue(queueOut);
+        MQMessageProducer producer = (MQMessageProducer) mqSession.createProducer(requestQueue);
+
+        TextMessage message = mqSession.createTextMessage();
+        message.setText(content);
+        message.setJMSReplyTo(replyQueue);
+
+        producer.send(message);
+
+        // receive in sync
+        String msgId = message.getJMSMessageID();
+        MQMessageConsumer consumer = (MQMessageConsumer)
+                mqSession.createConsumer(replyQueue, "JMSCorrelationID='" + msgId + "'");
+
+        System.out.printf("collecting message with id: %s, from queue:%s\n", msgId, replyQueue);
+        Message replyMessage = consumer.receive(12300);
+        String replyBody = ((TextMessage) replyMessage).getText();
+        System.out.println(replyBody);
+        System.out.println(replyMessage);
+
+        consumer.close();
+        producer.close();
+        mqSession.close();
+        mqConnection.close();
+
+    }
+
+
+    private static void testAccountInquiry_OLD(String content) throws JMSException {
 
         final String HOST = "localhost";
         final int PORT = 1414;
@@ -189,4 +344,28 @@ public class MQMain {
         mqSession.close();
         mqConnection.close();
     }
+
+
+    private final static String MSG_ACCOUNT_INQUIRY = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+            "<esb>\n" +
+            "    <Header>\n" +
+            "        <ClientId>AbC</ClientId>\n" +
+            "        <CServiceType>Inquiry</CServiceType>\n" +
+            "        <CMsgType>Account</CMsgType>\n" +
+            "        <CTxnId>L0000015561</CTxnId>\n" +
+            "        <CDateTime>20190118104002</CDateTime>\n" +
+            "        <TxnId>20190118104002</TxnId>\n" +
+            "    </Header>\n" +
+            "    <Body>\n" +
+            "        <Region>0090</Region>\n" +
+            "        <CustLoginId>9961</CustLoginId>\n" +
+            "        <SupervisorId/>\n" +
+            "        <TermId>ZZ61</TermId>\n" +
+            "        <KWBKCustLoginId/>\n" +
+            "        <KWBKSupervisorId/>\n" +
+            "        <AcctId>90005566100000007100000</AcctId>\n" +
+            "        <AcctType>DDA</AcctType>\n" +
+            "        <CurCode/>\n" +
+            "    </Body>\n" +
+            "</esb>";
 }
